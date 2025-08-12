@@ -1,5 +1,7 @@
+
 import joblib
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import os
@@ -12,7 +14,17 @@ except Exception as e:
     predictor = None
     print(f"Failed to load model: {e}")
 
+
 app = FastAPI(title="DiaSight DR Predictor API")
+
+# Allow CORS for all origins (for development). For production, set origins to your frontend URL.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Change to ["http://localhost:3000"] or your frontend URL for more security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # List all required features here. Adjust as needed for your model.
 class PatientInput(BaseModel):
