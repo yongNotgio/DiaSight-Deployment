@@ -1,0 +1,116 @@
+{
+  "model_names": [
+    "CatBoost",
+    "ElasticNetLR",
+    "QDA",
+    "StackedBlend"
+  ],
+  "feature_names": [
+    "age",
+    "sex",
+    "sbp",
+    "dbp",
+    "hbp",
+    "duration",
+    "hb1ac",
+    "ldl",
+    "hdl",
+    "chol",
+    "urea",
+    "bun",
+    "uric",
+    "egfr",
+    "trig",
+    "ucr",
+    "alt",
+    "ast",
+    "age_hba1c_interaction",
+    "duration_egfr_ratio",
+    "ldl_hdl_ratio"
+  ],
+  "class_names": [
+    "No DR",
+    "Mild DR",
+    "Severe DR"
+  ],
+  "version": "1.0",
+  "created_at": "2025-08-12T13:17:57.218625",
+  "data_info": {
+    "training_samples": 1614,
+    "test_samples": 404,
+    "feature_count": 21,
+    "class_distribution": {
+      "1": 833,
+      "2": 539,
+      "0": 242
+    }
+  },
+  "input_requirements": {
+    "required_base_features": [
+      "age",
+      "hb1ac",
+      "duration",
+      "egfr",
+      "ldl",
+      "hdl",
+      "chol"
+    ],
+    "all_features": [
+      "age",
+      "sex",
+      "sbp",
+      "dbp",
+      "hbp",
+      "duration",
+      "hb1ac",
+      "ldl",
+      "hdl",
+      "chol",
+      "urea",
+      "bun",
+      "uric",
+      "egfr",
+      "trig",
+      "ucr",
+      "alt",
+      "ast",
+      "age_hba1c_interaction",
+      "duration_egfr_ratio",
+      "ldl_hdl_ratio"
+    ],
+    "engineered_features": [
+      "age_hba1c_interaction",
+      "duration_egfr_ratio",
+      "ldl_hdl_ratio"
+    ],
+    "input_format": "pandas DataFrame, Series, or dictionary",
+    "missing_value_handling": "Filled with training means or zeros"
+  },
+  "model_details": {
+    "ensemble_weights": {
+      "catboost": "Optimized via grid search",
+      "elasticnet": "Optimized via grid search"
+    },
+    "temperature_scaling": "Applied for probability calibration",
+    "threshold_optimization": "Optimized for balanced accuracy/F1-macro",
+    "preprocessing": {
+      "feature_engineering": "Clinical interactions created",
+      "scaling": "RobustScaler for ElasticNet/QDA",
+      "imputation": "Training set statistics"
+    }
+  },
+  "deployment_info": {
+    "recommended_model": "catboost_predictor.pkl",
+    "ensemble_model": "stackedblend_predictor.pkl",
+    "file_formats": [
+      "pkl (joblib)",
+      "pickle (backup)"
+    ],
+    "dependencies": [
+      "numpy",
+      "pandas",
+      "scikit-learn",
+      "catboost"
+    ]
+  }
+}
