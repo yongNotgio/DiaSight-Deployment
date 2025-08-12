@@ -232,8 +232,8 @@ app.add_middleware(
 # -------------------------------
 # 4) Global variables and utilities
 # -------------------------------
-# Default models directory - you can change this
-DEFAULT_MODELS_DIR = r"C:\Users\gioan\Documents\GitHub\DiaSight-Deployment\models"
+# Default models directory - use relative path for deployment
+DEFAULT_MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 models_dir = Path(DEFAULT_MODELS_DIR)
 loaded_predictor: Optional[DiabetesRiskPredictor] = None
 current_model_name: Optional[str] = None
