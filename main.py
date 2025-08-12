@@ -11,6 +11,7 @@ import pickle
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -18,6 +19,63 @@ import uvicorn
 # 1) Import Predictor class from separate module
 # -------------------------------
 from predictor import DiabetesRiskPredictor
+
+# -------------------------------
+# Lifespan Events
+# -------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events"""
+    # Startup
+    global loaded_predictor, current_model_name
+    
+    # Try to load models in order of preference
+    preferred_models = [
+        "stacked_blend_model.pkl",
+        "stackedblend_predictor.pkl", 
+        "catboost_model.pkl",
+        "catboost_predictor.pkl",
+        "lightgbm_model.pkl"
+    ]
+    
+    available_models = list_available_models()
+    
+    for model_name in preferred_models:
+        if model_name in available_models:
+            try:
+                model_path = models_dir / model_name
+                if model_name.endswith("_predictor.pkl"):
+                    loaded_predictor = joblib.load(model_path)
+                else:
+                    loaded_predictor = create_predictor_from_model(model_path)
+                
+                current_model_name = model_name
+                print(f"✅ Loaded default model: {model_name}")
+                break
+            except Exception as e:
+                print(f"❌ Failed to load model {model_name}: {e}")
+                continue
+    else:
+        # If no preferred model found, try the first available
+        if available_models:
+            try:
+                first_model = available_models[0]
+                model_path = models_dir / first_model
+                if first_model.endswith("_predictor.pkl"):
+                    loaded_predictor = joblib.load(model_path)
+                else:
+                    loaded_predictor = create_predictor_from_model(model_path)
+                
+                current_model_name = first_model
+                print(f"✅ Loaded first available model: {first_model}")
+            except Exception as e:
+                print(f"❌ Failed to load first model: {e}")
+        else:
+            print("⚠️ No models found in directory")
+    
+    yield
+    # Shutdown - cleanup if needed
+    print("🔄 Application shutting down")
 
 # -------------------------------
 # 2) Pydantic Models for API
@@ -81,7 +139,8 @@ class FeatureImportance(BaseModel):
 app = FastAPI(
     title="DiaSight - Diabetes Retinopathy Risk Prediction API",
     description="API for predicting diabetes retinopathy risk using machine learning models",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -125,11 +184,101 @@ def load_metadata():
         except Exception:
             stats_json = None
 
+def create_predictor_from_model(model_path: Path) -> DiabetesRiskPredictor:
+    """Create a DiabetesRiskPredictor from a raw model file"""
+    predictor = DiabetesRiskPredictor()
+    
+    # Load the raw model
+    model_data = joblib.load(model_path)
+    
+    # Load feature statistics and metadata
+    if stats_json:
+        predictor.feature_stats = stats_json
+    
+    if meta_json:
+        predictor.selected_features = meta_json.get('feature_names', [
+            "age","sex","sbp","dbp","hbp","duration","hb1ac","ldl","hdl","chol",
+            "urea","bun","uric","egfr","trig","ucr","alt","ast",
+            "age_hba1c_interaction","duration_egfr_ratio","ldl_hdl_ratio"
+        ])
+    else:
+        predictor.selected_features = [
+            "age","sex","sbp","dbp","hbp","duration","hb1ac","ldl","hdl","chol",
+            "urea","bun","uric","egfr","trig","ucr","alt","ast",
+            "age_hba1c_interaction","duration_egfr_ratio","ldl_hdl_ratio"
+        ]
+    
+    # Set default thresholds
+    predictor.tau0 = 0.5
+    predictor.tau1 = 0.5
+    
+    # Handle different model types
+    model_name = model_path.stem.lower()
+    
+    # Check if this is a dictionary-based ensemble model
+    if isinstance(model_data, dict) and 'catboost_model' in model_data:
+        # Handle dictionary-based ensemble model
+        predictor.is_ensemble = True
+        predictor.model_type = "StackedBlend"
+        predictor.catboost_model = model_data['catboost_model']
+        predictor.elasticnet_model = model_data['elasticnet_model']
+        
+        # Extract weights if available
+        if 'weights' in model_data:
+            weights = model_data['weights']
+            predictor.weight_catboost = weights[0] if len(weights) > 0 else 0.6
+            predictor.weight_elasticnet = weights[1] if len(weights) > 1 else 0.4
+        else:
+            predictor.weight_catboost = 0.6
+            predictor.weight_elasticnet = 0.4
+            
+    elif "stacked" in model_name or "blend" in model_name:
+        # Handle ensemble model with separate files
+        predictor.is_ensemble = True
+        predictor.model_type = "StackedBlend"
+        
+        # Try to load individual models for ensemble
+        catboost_path = models_dir / "catboost_model.pkl"
+        elasticnet_path = models_dir / "elasticnetlr_model.pkl"
+        
+        if catboost_path.exists() and elasticnet_path.exists():
+            predictor.catboost_model = joblib.load(catboost_path)
+            predictor.elasticnet_model = joblib.load(elasticnet_path)
+            predictor.weight_catboost = 0.6  # Default weights
+            predictor.weight_elasticnet = 0.4
+        else:
+            # Fall back to single model
+            predictor.is_ensemble = False
+            predictor.model = model_data
+    else:
+        # Single model
+        predictor.is_ensemble = False
+        predictor.model = model_data
+        
+        if "catboost" in model_name:
+            predictor.model_type = "CatBoost"
+        elif "lightgbm" in model_name:
+            predictor.model_type = "LightGBM"
+        elif "elasticnet" in model_name:
+            predictor.model_type = "ElasticNet"
+        elif "qda" in model_name:
+            predictor.model_type = "QDA"
+        else:
+            predictor.model_type = "Unknown"
+    
+    return predictor
+
 def list_available_models() -> List[str]:
     """List available predictor models"""
     if not models_dir.exists():
         return []
-    return sorted([f.name for f in models_dir.glob("*_predictor.pkl")])
+    
+    # Look for actual model files in the directory
+    model_files = []
+    for pattern in ["*_model.pkl", "*_predictor.pkl"]:
+        model_files.extend(models_dir.glob(pattern))
+    
+    return sorted([f.name for f in model_files])
 
 def convert_numpy_types(obj):
     """Convert numpy types to Python native types for JSON serialization"""
@@ -178,15 +327,34 @@ async def load_model(model_name: str):
     """Load a specific model by name"""
     global loaded_predictor, current_model_name
     
-    if not model_name.endswith("_predictor.pkl"):
-        model_name += "_predictor.pkl"
+    # Handle both _model.pkl and _predictor.pkl extensions
+    if not (model_name.endswith("_model.pkl") or model_name.endswith("_predictor.pkl")):
+        # Try both extensions
+        model_path_1 = models_dir / f"{model_name}_model.pkl"
+        model_path_2 = models_dir / f"{model_name}_predictor.pkl"
+        
+        if model_path_1.exists():
+            model_path = model_path_1
+            model_name = f"{model_name}_model.pkl"
+        elif model_path_2.exists():
+            model_path = model_path_2
+            model_name = f"{model_name}_predictor.pkl"
+        else:
+            raise HTTPException(status_code=404, detail=f"Model {model_name} not found")
+    else:
+        model_path = models_dir / model_name
     
-    model_path = models_dir / model_name
     if not model_path.exists():
         raise HTTPException(status_code=404, detail=f"Model {model_name} not found")
     
     try:
-        loaded_predictor = joblib.load(model_path)
+        if model_name.endswith("_predictor.pkl"):
+            # Load pre-wrapped predictor
+            loaded_predictor = joblib.load(model_path)
+        else:
+            # Wrap raw model in predictor
+            loaded_predictor = create_predictor_from_model(model_path)
+        
         current_model_name = model_name
         return {
             "message": f"Successfully loaded model: {model_name}",
@@ -367,34 +535,6 @@ async def health_check():
 # -------------------------------
 # 6) Startup and Configuration
 # -------------------------------
-
-@app.on_event("startup")
-async def startup_event():
-    """Load default model on startup if available"""
-    global loaded_predictor, current_model_name
-    
-    # Try to load the stacked blend model by default
-    default_model = "stackedblend_predictor.pkl"
-    available_models = list_available_models()
-    
-    if default_model in available_models:
-        try:
-            loaded_predictor = joblib.load(models_dir / default_model)
-            current_model_name = default_model
-            print(f"✅ Loaded default model: {default_model}")
-        except Exception as e:
-            print(f"❌ Failed to load default model: {e}")
-    elif available_models:
-        # Load the first available model
-        try:
-            first_model = available_models[0]
-            loaded_predictor = joblib.load(models_dir / first_model)
-            current_model_name = first_model
-            print(f"✅ Loaded first available model: {first_model}")
-        except Exception as e:
-            print(f"❌ Failed to load first model: {e}")
-    else:
-        print("⚠️ No models found in directory")
 
 # -------------------------------
 # 7) Main execution
